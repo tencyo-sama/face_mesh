@@ -2,116 +2,216 @@
 <html>
 <head>
   <meta charset="utf-8">
-
-  <!-- Face Mesh ライブラリを読み込む -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Face Mesh Detection</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <style>
+    /* ハンドジェスチャーコードと同じスタイル */
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: #000;
+    }
+    .container {
+      width: 100%;
+      height: 85vh;
+      position: relative;
+      overflow: hidden;
+    }
+    #output {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .button-container {
+      position: fixed;
+      bottom: 20px;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      z-index: 1000;
+    }
+    button {
+      padding: 15px 30px;
+      font-size: 18px;
+      border-radius: 25px;
+      border: none;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    button:hover {
+      background: rgba(255, 255, 255, 1);
+    }
+    .message {
+      position: fixed;
+      bottom: 100px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 5px;
+      font-size: 20px;
+      z-index: 1000;
+    }
+    .detection-message { /* OKサインメッセージと同じスタイル、クラス名を変更 */
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 72px;
+      color: #FF4444;
+      font-weight: bold;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+      z-index: 1000;
+    }
+  </style>
 </head>
 <body>
   <div class="container">
-    
-    <!-- Webカメラの映像（入力） -->
-    <video id="input"></video>
-    
-    <!--  認識した顔メッシュを可視化した映像（出力）  -->
-    <canvas id="output" width="600" height="400"></canvas>
-    
-    <!-- 認識結果を表示するエリア -->
-    <div id="result"></div> 
+    <canvas id="output"></canvas>
+    <video id="input" style="display: none;" playsinline></video>
   </div>
-  <button id="start">start</button>
-  <button id="stop">stop</button>
-  
+  <div class="button-container">
+    <button id="start">start</button>
+    <button id="stop">stop</button>
+  </div>
+  <div class="message" id="message"></div>
+  <div class="detection-message" id="detection-message"></div> <div id="result" style="display:none;"></div>
+
   <script>
     const video = document.getElementById('input');
     const canvas = document.getElementById('output');
+    const messageDiv = document.getElementById('message');
+    const detectionMessageDiv = document.getElementById('detection-message'); // 要素の取得と変数名を修正
     const ctx = canvas.getContext('2d');
-    const resultDiv = document.getElementById('result'); // 結果表示エリアの取得
 
-    //関連ファイルの読み込み (Face Mesh に変更)
-    const config = {
-      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-    };
-    const faceMesh = new FaceMesh(config);
+    // キャンバスのサイズをウィンドウに合わせる
+    function resizeCanvas() {
+      const container = document.querySelector('.container');
+      canvas.width = container.clientWidth;
+      canvas.height = container.clientHeight;
+    }
 
-    //カメラからの映像をfaceMesh.jsで使えるようにする
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // FaceMeshの設定
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+      }
+    });
+
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      minDetectionConfidence: 0.7, // 精度向上のため少し高く設定
+      minTrackingConfidence: 0.7   // 精度向上のため少し高く設定
+    });
+
+    // カメラの設定 (インカメラを使用)
     const camera = new Camera(video, {
       onFrame: async () => {
         await faceMesh.send({image: video});
       },
-      width: 600,
-      height: 400
+      width: 1280,
+      height: 720,
+      facingMode: 'user' // インカメラを使う
     });
 
-    faceMesh.setOptions({
-        maxNumFaces: 1,              //検出する顔の最大数
-        minDetectionConfidence: 0.5, //顔を検出するための信頼値(0.0~1.0)
-        minTrackingConfidence: 0.5   //ランドマーク追跡の信頼度(0.0~1.0)
-    });
+    // ウィンクと口の開きの検出
+    function detectWinkAndMouthOpen(landmarks) {
+      // ウィンクの認識 (左目: ランドマーク 33, 133, 右目: ランドマーク 362, 263)
+      const leftEyeDistance = distance(landmarks[33], landmarks[133]);
+      const rightEyeDistance = distance(landmarks[362], landmarks[263]);
 
-    //顔メッシュ認識結果の取得
-    faceMesh.onResults(results => {
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      ctx.drawImage(results.image,0,0,canvas.width,canvas.height);
-      
-      let winkDetected = false; // ウィンク検出フラグ
-      let mouthOpenDetected = false; // 口の開き検出フラグ
+      const winkThreshold = 0.018;  // ウィンク検出の閾値
+      const winkDetected = leftEyeDistance < winkThreshold || rightEyeDistance < winkThreshold;
 
-      if(results.multiFaceLandmarks) {
-        for (const landmarks of results.multiFaceLandmarks) {
-          drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
-          drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE, {color: '#FF3030'});
-          drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYEBROW, {color: '#FF3030'});
-          drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE, {color: '#30FF30'});
-          drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYEBROW, {color: '#30FF30'});
-          drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL, {color: '#E0E0E0'});
-          drawConnectors(ctx, landmarks, FACEMESH_LIPS, {color: '#E0E0E0'});
+      // 口の開きの認識 (上唇: ランドマーク 0, 下唇: ランドマーク 17)
+      const mouthDistance = distance(landmarks[0], landmarks[17]);
+      const mouthOpenThreshold = 0.055; // 口の開き検出の閾値
+      const mouthOpenDetected = mouthDistance > mouthOpenThreshold;
 
-          // ウィンクの認識 (参考: ランドマークのインデックスは調整が必要な場合があります)
-          const upperEyeLid = landmarks[159];
-          const lowerEyeLid = landmarks[145];
-          const eyeDistance = Math.sqrt(
-            Math.pow(upperEyeLid.x - lowerEyeLid.x, 2) + 
-            Math.pow(upperEyeLid.y - lowerEyeLid.y, 2)
-          );
+      return { winkDetected, mouthOpenDetected };
+    }
 
-          if (eyeDistance < 0.015) { // 閾値: 調整が必要
-            winkDetected = true; 
-          }
+    function distance(point1, point2) {
+      return Math.sqrt(Math.pow(point1.x - point2.x, 2) + Math.pow(point1.y - point2.y, 2));
+    }
 
-          // 口の開きの認識 (参考: ランドマークのインデックスは調整が必要な場合があります)
-          const upperLip = landmarks[13];
-          const lowerLip = landmarks[14];
-          const mouthDistance = Math.sqrt(
-            Math.pow(upperLip.x - lowerLip.x, 2) + 
-            Math.pow(upperLip.y - lowerLip.y, 2)
-          );
-          
-          if (mouthDistance > 0.04) { // 閾値: 調整が必要
-            mouthOpenDetected = true;
-          }
-        }
-      }
-      
-      // 認識結果を表示
+    // メッセージの表示
+    function drawDetectionMessage(winkDetected, mouthOpenDetected) {
       if (winkDetected) {
-        resultDiv.innerHTML = "ウィンクを検出しました！";
+        detectionMessageDiv.textContent = "ウィンクを検知";
       } else if (mouthOpenDetected) {
-        resultDiv.innerHTML = "口を大きく開けるのを検出しました！";
+        detectionMessageDiv.textContent = "あくびを検知";
       } else {
-        resultDiv.innerHTML = "";
+        detectionMessageDiv.textContent = "";
       }
+    }
 
+    // 検出結果の処理
+    faceMesh.onResults(results => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      if (results.multiFaceLandmarks) {
+        results.multiFaceLandmarks.forEach(landmarks => {
+          drawConnectors(ctx, landmarks, FACEMESH_TESSELATION,
+            { color: '#C0C0C070', lineWidth: 1 });
+          drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL, { color: '#E0E0E0' });
+
+           // ウィンクと口の開きの検出結果を取得
+          const { winkDetected, mouthOpenDetected } = detectWinkAndMouthOpen(landmarks);
+
+          // メッセージを表示
+          drawDetectionMessage(winkDetected, mouthOpenDetected);
+        });
+      }
     });
 
-    
-    //認識開始・終了ボタン
-    document.getElementById('start')
-      .addEventListener('click', () => camera.start());
-    document.getElementById('stop')
-      .addEventListener('click', () =>  camera.stop());
+    // 開始/停止ボタンの処理、エラーハンドリングはハンドジェスチャーコードと同じ
+    document.getElementById('start').addEventListener('click', () => {
+      console.log('Start button clicked');
+      messageDiv.textContent = 'カメラを起動中...';
+      camera.start()
+        .then(() => {
+          console.log('Camera started successfully');
+          messageDiv.textContent = 'カメラ起動完了';
+          setTimeout(() => {
+            messageDiv.textContent = '';
+          }, 2000);
+        })
+        .catch(error => {
+          console.error('Camera start error:', error);
+          messageDiv.textContent = 'カメラの起動に失敗しました';
+        });
+    });
 
+    document.getElementById('stop').addEventListener('click', () => {
+      console.log('Stop button clicked');
+      camera.stop();
+      messageDiv.textContent = '';
+      detectionMessageDiv.textContent = ''; // メッセージもクリア
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+
+    window.onerror = function(msg, url, lineNo, columnNo, error) {
+      console.error('Global error:', msg, url, lineNo, columnNo, error);
+      messageDiv.textContent = 'エラーが発生しました';
+      return false;
+    };
   </script>
 </body>
 </html>
